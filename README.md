@@ -2,6 +2,7 @@
 Compression tool for Toshio Toyota (Sega Mega Drive) games
 
 **DECOMPRESSION**: lztoshio.exe [Filename] d [HexOffset]
+
 **COMPRESSION**: LZToshio.exe [InFilename] [OutFilename] c
 
 ***List of games***:

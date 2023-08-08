@@ -135,7 +135,12 @@ void init_wnd(byte **window, byte **reserve, ushort *wndoff)
 
     for (int i = 0; i < 0x6E; ++i)
     {
-        (*window)[i] = 0x20;
+        (*window)[0xF80 + i] = 0x20;
+    }
+
+    for (int i = 0; i < 0x12; ++i)
+    {
+        (*window)[0xFEE + i] = 0x00;
     }
 
     *wndoff = 0xFEE;
@@ -149,7 +154,7 @@ void find_matches(byte *input, int readoff, int size, int wndoff, byte *window, 
     wpos = min_pos;
     memcpy(reserve, window, wndsize);
 
-    while (wpos < max_pos)
+    while (wpos < max_pos && tlen < maxreps1)
     {
         tlen = 0;
         while ((readoff + tlen < size && tlen < maxreps1) &&
@@ -204,7 +209,14 @@ int ADDCALL compress(byte *input, byte *output, int size)
 
     while (readoff < size)
     {
-        find_matches(input, readoff, size, wndoff, window, reserve, &reps, &from, 0, wndsize);
+        if (readoff < 0x12)
+        {
+            find_matches(input, readoff, size, wndoff, window, reserve, &reps, &from, 0, wndsize - (0x12 - readoff));
+        }
+        else
+        {
+            find_matches(input, readoff, size, wndoff, window, reserve, &reps, &from, 0, wndsize);
+        }
 
         if (reps <= 2)
         {
@@ -240,6 +252,10 @@ int ADDCALL compress(byte *input, byte *output, int size)
     writeoff = 0;
     write_dword_le(output, &writeoff, retn - 8); // enc_size
     write_dword_le(output, &writeoff, size); // dec_size
+    if (retn & 1)
+    {
+        output[retn] = 0x00;
+    }
     return (retn & 1) ? retn + 1 : retn;
 }
 

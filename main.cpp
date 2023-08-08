@@ -105,10 +105,9 @@ void write_token(byte *output, int *writeoff, byte reps, ushort from)
     write_word_le(output, writeoff, t);
 }
 
-void init_wnd(byte **window, byte **reserve, ushort *wndoff)
+void init_wnd(byte **window, ushort *wndoff)
 {
     *window = (byte *)malloc(wndsize);
-    *reserve = (byte *)malloc(wndsize);
     
     for (int i = 0; i < 0x100; ++i)
     {
@@ -135,28 +134,48 @@ void init_wnd(byte **window, byte **reserve, ushort *wndoff)
 
     for (int i = 0; i < 0x6E; ++i)
     {
-        (*window)[i] = 0x20;
+        (*window)[0xF80 + i] = 0x20;
+    }
+
+    for (int i = 0; i < 0x12; ++i)
+    {
+        (*window)[0xFEE + i] = 0x00;
     }
 
     *wndoff = 0xFEE;
 }
 
-void find_matches(byte *input, int readoff, int size, int wndoff, byte *window, byte *reserve, byte *reps, ushort *from, int min_pos, int max_pos)
+void find_matches(byte *input, int readoff, int size, int wndoff, byte *window, byte *reps, ushort *from, int min_pos, int max_pos)
 {
     int wpos = 0, tlen = 0;
 
     *reps = 1;
     wpos = min_pos;
-    memcpy(reserve, window, wndsize);
 
-    while (wpos < max_pos)
+    while (wpos < max_pos && tlen < maxreps1)
     {
         tlen = 0;
-        while ((readoff + tlen < size && tlen < maxreps1) &&
-            window[(wpos + tlen) & wndmask] == input[readoff + tlen])
+        while (readoff + tlen < size && tlen < maxreps1)
         {
-            window[(wndoff + tlen) & wndmask] = input[readoff + tlen];
-            tlen++;
+            if (((wpos + tlen) & wndmask) == wndoff && tlen != 0)
+            {
+                int index = 0;
+                while ((readoff + tlen < size && tlen < maxreps1) &&
+                    input[readoff + index] == input[readoff + tlen])
+                {
+                    tlen++;
+                    index++;
+                }
+                break;
+            }
+            else if (window[(wpos + tlen) & wndmask] == input[readoff + tlen])
+            {
+                tlen++;
+            }
+            else
+            {
+                break;
+            }
         }
 
         if (tlen >= *reps)
@@ -165,7 +184,6 @@ void find_matches(byte *input, int readoff, int size, int wndoff, byte *window, 
             *from = wpos & wndmask;
         }
 
-        memcpy(window, reserve, wndsize);
         wpos++;
     }
 }
@@ -174,17 +192,17 @@ void reinit_and_find(byte *input, int size, int offset, byte *reps, ushort *from
 {
     int  i = 0, readoff = 0;
     byte b = 0;
-    byte *window, *reserve;
+    byte *window;
     ushort wndoff = 0;
 
-    init_wnd(&window, &reserve, &wndoff);
+    init_wnd(&window, &wndoff);
 
     for (i = 0; i < offset; ++i) {
         b = read_byte(input, &readoff);
         write_to_wnd(window, &wndoff, b);
     }
 
-    find_matches(input, readoff, size, wndoff, window, reserve, reps, from, 0, wndsize);
+    find_matches(input, readoff, size, wndoff, window, reps, from, 0, wndsize);
 }
 
 int ADDCALL compress(byte *input, byte *output, int size)
@@ -192,9 +210,9 @@ int ADDCALL compress(byte *input, byte *output, int size)
     int i = 0, readoff = 0, writeoff = 0, cmdoff = 0;
     ushort wndoff = 0, from = 0;
     byte b = 0, bitscnt = 0, reps = 0;
-    byte *window, *reserve;
+    byte *window;
 
-    init_wnd(&window, &reserve, &wndoff);
+    init_wnd(&window, &wndoff);
 
     readoff = 0;
     writeoff = 9;
@@ -204,7 +222,14 @@ int ADDCALL compress(byte *input, byte *output, int size)
 
     while (readoff < size)
     {
-        find_matches(input, readoff, size, wndoff, window, reserve, &reps, &from, 0, wndsize);
+        if (readoff < 0x12)
+        {
+            find_matches(input, readoff, size, wndoff, window, &reps, &from, 0, wndsize - (0x12 - readoff));
+        }
+        else
+        {
+            find_matches(input, readoff, size, wndoff, window, &reps, &from, 0, wndsize);
+        }
 
         if (reps <= 2)
         {
@@ -234,12 +259,15 @@ int ADDCALL compress(byte *input, byte *output, int size)
     }
 
     free(window);
-    free(reserve);
 
     int retn = writeoff;
     writeoff = 0;
     write_dword_le(output, &writeoff, retn - 8); // enc_size
     write_dword_le(output, &writeoff, size); // dec_size
+    if (retn & 1)
+    {
+        output[retn] = 0x00;
+    }
     return (retn & 1) ? retn + 1 : retn;
 }
 
@@ -248,9 +276,9 @@ int ADDCALL decompress(byte *input, byte *output)
     int enc_size = 0, dec_size = 0, readoff = 0, writeoff = 0;
     byte b = 0, bit = 0, bitscnt = 0, cmd = 0, reps = 0;
     ushort wndoff = 0, from = 0;
-    byte *window, *reserve;
+    byte *window;
 
-    init_wnd(&window, &reserve, &wndoff);
+    init_wnd(&window, &wndoff);
 
     readoff = 0;
     writeoff = 0;
@@ -290,7 +318,6 @@ int ADDCALL decompress(byte *input, byte *output)
     }
 
     free(window);
-    free(reserve);
     return writeoff;
 }
 
@@ -326,6 +353,15 @@ int ADDCALL compressed_size(byte *input)
 int main(int argc, char *argv[])
 {
     byte *input, *output;
+
+    if (argc < 4 || (argc == 4 && argv[3][0] == 'd'))
+    {
+        puts("usage:\n"
+             "  decompression: lztoshio.exe InFilename OutFilename d HexOffset\n"
+             "  compression  : lztoshio.exe InFilename OutFilename c"
+        );
+        return 1;
+    }
 
     FILE *inf = fopen(argv[1], "rb");
 
